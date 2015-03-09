@@ -3,9 +3,11 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os" // for File and friends
+	"regexp"
 	"time"
 )
 
@@ -49,6 +51,22 @@ func (h *Harvester) Harvest(output chan *FileEvent) {
 
 	var read_timeout = 10 * time.Second
 	last_read_time := time.Now()
+
+    // Regexp parsing initialization
+	var res []*regexp.Regexp
+	var parse_res bool = false
+	var res_len = len(h.FileConfig.Regexps)
+	if res_len > 0 {
+		res = make([]*regexp.Regexp, res_len)
+		for i, re_str := range h.FileConfig.Regexps {
+			re, err := regexp.Compile(re_str)
+			if err == nil {
+				res[i] = re
+				parse_res = true
+			}
+		}
+	}
+
 	for {
 		text, bytesread, err := h.readline(reader, buffer, read_timeout)
 
@@ -76,6 +94,31 @@ func (h *Harvester) Harvest(output chan *FileEvent) {
 		last_read_time = time.Now()
 
 		line++
+
+        // Parse log line into key/val json pairs if regexp/s provided in config
+		// Return first regexp that matches log text
+		if parse_res {
+			for _, re := range res {
+				if re != nil {
+					if re.MatchString(*text) {
+						kv := make(map[string]string)
+						keys := re.SubexpNames()
+						matches := re.FindAllStringSubmatch(*text, -1)[0]
+						for i, vals := range matches {
+							if i > 0 {
+								kv[keys[i]] = vals
+							}
+						}
+						text_bytes, err := json.Marshal(kv)
+						if err == nil {
+							*text = string(text_bytes)
+							break
+						}
+					}
+				}
+			}
+		}
+
 		event := &FileEvent{
 			Source:   &h.Path,
 			Offset:   h.Offset,
